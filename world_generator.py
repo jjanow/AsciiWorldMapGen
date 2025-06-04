@@ -44,8 +44,8 @@ class WorldGenerator:
 
     def ascii_map(self) -> str:
         heightmap = self.generate_heightmap()
-        dryness = [[self._noise(x + 1024, y + 1024) * 0.5 + 0.5 for x in range(self.width)]
-                   for y in range(self.height)]
+        dryness_noise = [[self._noise(x + 1024, y + 1024) * 0.5 + 0.5 for x in range(self.width)]
+                          for y in range(self.height)]
         river_noise = [[abs(self._noise(x + 2048, y + 2048)) for x in range(self.width)]
                        for y in range(self.height)]
         road_noise = [[abs(self._noise(x + 4096, y + 4096)) for x in range(self.width)]
@@ -55,26 +55,28 @@ class WorldGenerator:
 
         lines = []
         for y, row in enumerate(heightmap):
+            lat_factor = 1 - abs((y / (self.height - 1)) - 0.5) * 2
             line = []
             for x, h in enumerate(row):
-                d = dryness[y][x]
+                base_d = dryness_noise[y][x]
+                d = min(1.0, base_d * 0.6 + lat_factor * 0.4)
                 r = river_noise[y][x]
                 road = road_noise[y][x]
                 f = feature_noise[y][x]
                 char = ""
                 if h < 0.3:
                     char = "\x1b[34m~\x1b[0m"  # ocean
-                elif r < 0.03 and h >= 0.3:
+                elif r < 0.02 and h >= 0.35 and d < 0.7:
                     char = "\x1b[96m≋\x1b[0m"  # river
-                elif h > 0.85 and f > 0.8:
+                elif h > 0.85 and f > 0.92:
                     char = "\x1b[31m⛰\x1b[0m"  # volcano
-                elif h >= 0.7:
+                elif h >= 0.75:
                     char = "\x1b[37m▲\x1b[0m"  # mountain
                 elif road > 0.48 and road < 0.52:
                     char = "\x1b[90m═\x1b[0m"  # road
-                elif f > 0.7 and 0.4 < h < 0.7:
+                elif f > 0.75 and 0.4 < h < 0.7 and d < 0.7:
                     char = "\x1b[35m¤\x1b[0m"  # city
-                elif d > 0.75:
+                elif d > 0.7:
                     char = "\x1b[33m░\x1b[0m"  # desert
                 else:
                     char = "\x1b[32m·\x1b[0m"  # grass/land

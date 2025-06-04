@@ -3,7 +3,9 @@
 A Python tool to generate colorful world maps. The maps can be produced as
 ANSI colored ASCII text in the style of Dwarf Fortress or saved as a PNG image.
 The ASCII output now includes features such as deserts, rivers, volcanoes,
-roads and cities using extended characters for extra flair.
+roads and cities using extended characters for extra flair. The generator uses
+a latitudinal climate gradient combined with noise-based variation so biomes
+appear in larger, more coherent regions similar to classic roguelike worlds.
 
 ## Requirements
 
