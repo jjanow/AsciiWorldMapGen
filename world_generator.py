@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import shutil
 import sys
 from typing import Tuple
 
@@ -43,18 +44,41 @@ class WorldGenerator:
 
     def ascii_map(self) -> str:
         heightmap = self.generate_heightmap()
+        dryness = [[self._noise(x + 1024, y + 1024) * 0.5 + 0.5 for x in range(self.width)]
+                   for y in range(self.height)]
+        river_noise = [[abs(self._noise(x + 2048, y + 2048)) for x in range(self.width)]
+                       for y in range(self.height)]
+        road_noise = [[abs(self._noise(x + 4096, y + 4096)) for x in range(self.width)]
+                      for y in range(self.height)]
+        feature_noise = [[self._noise(x + 8192, y + 8192) * 0.5 + 0.5 for x in range(self.width)]
+                         for y in range(self.height)]
+
         lines = []
-        for row in heightmap:
+        for y, row in enumerate(heightmap):
             line = []
-            for h in row:
+            for x, h in enumerate(row):
+                d = dryness[y][x]
+                r = river_noise[y][x]
+                road = road_noise[y][x]
+                f = feature_noise[y][x]
+                char = ""
                 if h < 0.3:
-                    line.append("\x1b[34m~\x1b[0m")  # blue water
-                elif h < 0.5:
-                    line.append("\x1b[33m.\x1b[0m")  # sand
-                elif h < 0.7:
-                    line.append("\x1b[32m,\x1b[0m")  # grass
+                    char = "\x1b[34m~\x1b[0m"  # ocean
+                elif r < 0.03 and h >= 0.3:
+                    char = "\x1b[96m≋\x1b[0m"  # river
+                elif h > 0.85 and f > 0.8:
+                    char = "\x1b[31m⛰\x1b[0m"  # volcano
+                elif h >= 0.7:
+                    char = "\x1b[37m▲\x1b[0m"  # mountain
+                elif road > 0.48 and road < 0.52:
+                    char = "\x1b[90m═\x1b[0m"  # road
+                elif f > 0.7 and 0.4 < h < 0.7:
+                    char = "\x1b[35m¤\x1b[0m"  # city
+                elif d > 0.75:
+                    char = "\x1b[33m░\x1b[0m"  # desert
                 else:
-                    line.append("\x1b[37m^\x1b[0m")  # mountain
+                    char = "\x1b[32m·\x1b[0m"  # grass/land
+                line.append(char)
             lines.append("".join(line))
         return "\n".join(lines)
 
@@ -85,8 +109,8 @@ class WorldGenerator:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate world maps in ASCII or graphics.")
     parser.add_argument("mode", choices=["ascii", "graphics"], help="Output mode")
-    parser.add_argument("--width", type=int, default=80, help="Map width")
-    parser.add_argument("--height", type=int, default=40, help="Map height")
+    parser.add_argument("--width", type=int, default=None, help="Map width")
+    parser.add_argument("--height", type=int, default=None, help="Map height")
     parser.add_argument("--seed", type=int, default=None, help="Random seed")
     parser.add_argument("--scale", type=float, default=0.1, help="Noise scale")
     parser.add_argument("--output", default="world.png", help="Output image path for graphics mode")
@@ -95,7 +119,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    generator = WorldGenerator(args.width, args.height, args.seed, args.scale)
+    if args.width is None or args.height is None:
+        size = shutil.get_terminal_size(fallback=(80, 24))
+        width = args.width or size.columns
+        height = args.height or size.lines - 1
+    else:
+        width = args.width
+        height = args.height
+
+    generator = WorldGenerator(width, height, args.seed, args.scale)
     if args.mode == "ascii":
         try:
             sys.stdout.write(generator.ascii_map() + "\n")
