@@ -2,6 +2,8 @@
 
 A Python tool to generate colorful world maps. The maps can be produced as
 ANSI colored ASCII text in the style of Dwarf Fortress or saved as a PNG image.
+The ASCII output now includes features such as deserts, rivers, volcanoes,
+roads and cities using extended characters for extra flair.
 
 ## Requirements
 
@@ -15,8 +17,13 @@ pip install noise Pillow
 
 ## Usage
 
-Generate an ASCII world map:
+Generate an ASCII world map (defaults to your terminal size when width and
+height are not specified):
 
+```bash
+python world_generator.py ascii
+```
+You can still specify `--width` and `--height` if desired:
 ```bash
 python world_generator.py ascii --width 80 --height 40
 ```
