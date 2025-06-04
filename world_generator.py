@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import math
 import random
+import sys
 from typing import Tuple
 
 try:
@@ -96,7 +97,11 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     generator = WorldGenerator(args.width, args.height, args.seed, args.scale)
     if args.mode == "ascii":
-        print(generator.ascii_map())
+        try:
+            sys.stdout.write(generator.ascii_map() + "\n")
+        except BrokenPipeError:
+            # stdout was closed (e.g. piped command like `head`)
+            pass
     else:
         generator.save_image(args.output)
         print(f"Saved image to {args.output}")
