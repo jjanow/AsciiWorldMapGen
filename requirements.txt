@@ -1,0 +1,8 @@
+# Optional dependencies for AsciiWorldMapGen
+# Install with: pip install -r requirements.txt
+
+# For Perlin noise generation (optional - falls back to simple random noise)
+noise>=1.2.2
+
+# For image generation (optional - required for graphics mode)
+Pillow>=9.0.0 

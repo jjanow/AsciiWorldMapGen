@@ -7,17 +7,23 @@ import math
 import random
 import shutil
 import sys
-from typing import Tuple
+from typing import Tuple, TYPE_CHECKING
 
+# Try to import noise library for Perlin noise
 try:
     from noise import pnoise2
 except ImportError:  # pragma: no cover - fallback if noise isn't available
     pnoise2 = None
 
+# Try to import PIL for image generation
 try:
     from PIL import Image
+    if TYPE_CHECKING:
+        from PIL.Image import Image as PILImage
 except ImportError:  # pragma: no cover - should raise at runtime when graphics selected
     Image = None
+    if TYPE_CHECKING:
+        PILImage = None
 
 
 class WorldGenerator:
@@ -43,43 +49,91 @@ class WorldGenerator:
         return [[self._noise(x, y) * 0.5 + 0.5 for x in range(self.width)] for y in range(self.height)]
 
     def ascii_map(self) -> str:
-        heightmap = self.generate_heightmap()
-        dryness_noise = [[self._noise(x + 1024, y + 1024) * 0.5 + 0.5 for x in range(self.width)]
-                          for y in range(self.height)]
-        river_noise = [[abs(self._noise(x + 2048, y + 2048)) for x in range(self.width)]
-                       for y in range(self.height)]
-        road_noise = [[abs(self._noise(x + 4096, y + 4096)) for x in range(self.width)]
-                      for y in range(self.height)]
-        feature_noise = [[self._noise(x + 8192, y + 8192) * 0.5 + 0.5 for x in range(self.width)]
-                         for y in range(self.height)]
+        """
+        Generate an ANSI-colored ASCII map in the style of Dwarf Fortress.
+        Biomes and features are determined by height, dryness, latitude, and noise.
+        """
+        heightmap: list[list[float]] = self.generate_heightmap()
+        dryness_noise: list[list[float]] = [
+            [self._noise(x + 1024, y + 1024) * 0.5 + 0.5 for x in range(self.width)]
+            for y in range(self.height)
+        ]
+        river_noise: list[list[float]] = [
+            [abs(self._noise(x + 2048, y + 2048)) for x in range(self.width)]
+            for y in range(self.height)
+        ]
+        road_noise: list[list[float]] = [
+            [abs(self._noise(x + 4096, y + 4096)) for x in range(self.width)]
+            for y in range(self.height)
+        ]
+        feature_noise: list[list[float]] = [
+            [self._noise(x + 8192, y + 8192) * 0.5 + 0.5 for x in range(self.width)]
+            for y in range(self.height)
+        ]
 
-        lines = []
+        lines: list[str] = []
         for y, row in enumerate(heightmap):
-            lat_factor = 1 - abs((y / (self.height - 1)) - 0.5) * 2
-            line = []
+            lat: float = y / (self.height - 1)
+            lat_factor: float = 1 - abs(lat - 0.5) * 2  # -1 (pole) to 1 (equator)
+            line: list[str] = []
             for x, h in enumerate(row):
-                base_d = dryness_noise[y][x]
-                d = min(1.0, base_d * 0.6 + lat_factor * 0.4)
-                r = river_noise[y][x]
-                road = road_noise[y][x]
-                f = feature_noise[y][x]
-                char = ""
-                if h < 0.3:
-                    char = "\x1b[34m~\x1b[0m"  # ocean
-                elif r < 0.02 and h >= 0.35 and d < 0.7:
-                    char = "\x1b[96m≋\x1b[0m"  # river
-                elif h > 0.85 and f > 0.92:
-                    char = "\x1b[31m⛰\x1b[0m"  # volcano
-                elif h >= 0.75:
-                    char = "\x1b[37m▲\x1b[0m"  # mountain
-                elif road > 0.48 and road < 0.52:
-                    char = "\x1b[90m═\x1b[0m"  # road
-                elif f > 0.75 and 0.4 < h < 0.7 and d < 0.7:
-                    char = "\x1b[35m¤\x1b[0m"  # city
-                elif d > 0.7:
-                    char = "\x1b[33m░\x1b[0m"  # desert
+                base_d: float = dryness_noise[y][x]
+                # Blend dryness with latitude for climate zones
+                d: float = min(1.0, base_d * 0.6 + lat_factor * 0.4)
+                r: float = river_noise[y][x]
+                road: float = road_noise[y][x]
+                f: float = feature_noise[y][x]
+                char: str = ""
+
+                # --- Terrain and Biome Logic ---
+                if h < 0.28:
+                    # Deep ocean
+                    char = "\x1b[34m~\x1b[0m"
+                elif h < 0.32:
+                    # Shallow water/coast
+                    char = "\x1b[36m≈\x1b[0m"
+                elif r < 0.018 and h >= 0.33 and d < 0.7:
+                    # River
+                    char = "\x1b[96m≋\x1b[0m"
+                elif h > 0.88 and f > 0.93:
+                    # Volcano
+                    char = "\x1b[31m⛰\x1b[0m"
+                elif h >= 0.80:
+                    # High mountains
+                    char = "\x1b[37m▲\x1b[0m"
+                elif h >= 0.70:
+                    # Foothills
+                    char = "\x1b[37m^\x1b[0m"
+                elif d > 0.78 and h > 0.35:
+                    # Desert
+                    char = "\x1b[33m░\x1b[0m"
+                elif lat < 0.13 and h > 0.33:
+                    # Arctic tundra (north pole)
+                    char = "\x1b[37m^\x1b[0m"
+                elif lat > 0.87 and h > 0.33:
+                    # Antarctic tundra (south pole)
+                    char = "\x1b[37m^\x1b[0m"
+                elif d < 0.32 and 0.33 < h < 0.7 and lat_factor > 0.2:
+                    # Swamp
+                    char = "\x1b[92m#\x1b[0m"
+                elif d < 0.45 and 0.33 < h < 0.7 and lat_factor > 0.1:
+                    # Forest
+                    char = "\x1b[32mn\x1b[0m"
+                elif d < 0.60 and 0.33 < h < 0.7:
+                    # Grassland
+                    char = "\x1b[32m,\x1b[0m"
+                elif d < 0.75 and 0.33 < h < 0.7:
+                    # Plains
+                    char = "\x1b[32m.\x1b[0m"
+                elif road > 0.48 and road < 0.52 and h > 0.33:
+                    # Road
+                    char = "\x1b[90m═\x1b[0m"
+                elif f > 0.78 and 0.4 < h < 0.7 and d < 0.7:
+                    # City
+                    char = "\x1b[35m¤\x1b[0m"
                 else:
-                    char = "\x1b[32m·\x1b[0m"  # grass/land
+                    # Default land
+                    char = "\x1b[32m·\x1b[0m"
                 line.append(char)
             lines.append("".join(line))
         return "\n".join(lines)
@@ -104,7 +158,7 @@ class WorldGenerator:
                     gray = min(gray, 255)
                     color = (gray, gray, gray)
                 pixels[x, y] = color
-        img = img.resize((self.width * 4, self.height * 4), Image.NEAREST)
+        img = img.resize((self.width * 4, self.height * 4), Image.Resampling.NEAREST)
         img.save(path)
 
 
