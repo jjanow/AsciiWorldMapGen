@@ -7,7 +7,7 @@ import math
 import random
 import shutil
 import sys
-from typing import Tuple, TYPE_CHECKING
+from typing import Tuple, TYPE_CHECKING, List, Set
 
 # Try to import noise library for Perlin noise
 try:
@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover - should raise at runtime when graphics 
 
 
 class WorldGenerator:
-    """Generate world maps using Perlin noise."""
+    """Generate world maps using Perlin noise and advanced continent/mountain/biome logic."""
 
     def __init__(self, width: int = 80, height: int = 40, seed: int | None = None, scale: float = 0.1):
         if width <= 0 or height <= 0:
@@ -38,102 +38,148 @@ class WorldGenerator:
         self.scale = scale
         self.random = random.Random(self.seed)
 
-    def _noise(self, x: float, y: float) -> float:
+    def _perlin(self, x: float, y: float, scale: float, octaves: int = 1, base: int = 0) -> float:
         if pnoise2 is None:
-            # fallback simple noise using random seeded per coordinate
-            self.random.seed(int(x * 1000) ^ int(y * 1000) ^ self.seed)
+            self.random.seed(int(x * 1000) ^ int(y * 1000) ^ self.seed ^ base)
             return self.random.random()
-        return pnoise2(x * self.scale, y * self.scale, octaves=6, repeatx=1024, repeaty=1024, base=self.seed)
+        val = pnoise2(x * scale, y * scale, octaves=octaves, repeatx=4096, repeaty=4096, base=self.seed + base)
+        if val is None:
+            return 0.0
+        return val
 
-    def generate_heightmap(self) -> list[list[float]]:
-        return [[self._noise(x, y) * 0.5 + 0.5 for x in range(self.width)] for y in range(self.height)]
+    def generate_heightmap(self) -> List[List[float]]:
+        """
+        Generate a heightmap with continent mask and layered noise for realistic landmasses.
+        """
+        heightmap: List[List[float]] = []
+        for y in range(self.height):
+            row: List[float] = []
+            for x in range(self.width):
+                nx = x / self.width - 0.5
+                ny = y / self.height - 0.5
+                # Continent mask: large scale, centered
+                continent = self._perlin(nx, ny, scale=0.7, octaves=2, base=100) * 0.7
+                # Small scale details
+                detail = self._perlin(nx, ny, scale=3.0, octaves=6, base=200) * 0.3
+                # Edge falloff (to create more ocean at map edges)
+                dist = math.sqrt(nx * nx + ny * ny) / 0.7
+                edge = max(0.0, 1.0 - dist)
+                h = continent + detail
+                h = h * edge + 0.15 * edge  # More land in center
+                # Normalize to 0..1
+                h = (h + 1) / 2
+                if h is None:
+                    h = 0.0
+                row.append(h)
+            assert isinstance(row, list), f"Row {y} in heightmap is not a list: {row}"
+            heightmap.append(row)
+        assert all(isinstance(r, list) for r in heightmap), "Heightmap contains non-list rows"
+        return heightmap
+
+    def _generate_moisture(self) -> List[List[float]]:
+        """Generate a moisture map for biome assignment."""
+        moisture: List[List[float]] = []
+        for y in range(self.height):
+            row: List[float] = []
+            for x in range(self.width):
+                m = self._perlin(x / self.width, y / self.height, scale=2.0, octaves=4, base=300) * 0.5 + 0.5
+                if m is None:
+                    m = 0.0
+                row.append(m)
+            assert isinstance(row, list), f"Row {y} in moisture is not a list: {row}"
+            moisture.append(row)
+        assert all(isinstance(r, list) for r in moisture), "Moisture map contains non-list rows"
+        return moisture
+
+    def _find_rivers(self, heightmap: List[List[float]], num_rivers: int = 12) -> Set[Tuple[int, int]]:
+        """
+        Generate river paths by simulating water flow from high elevation to sea.
+        Returns a set of (x, y) coordinates for river tiles.
+        """
+        rivers: Set[Tuple[int, int]] = set()
+        for _ in range(num_rivers):
+            # Start at a random high elevation point
+            attempts = 0
+            while attempts < 100:
+                x = self.random.randint(0, self.width - 1)
+                y = self.random.randint(0, self.height - 1)
+                if heightmap[y][x] > 0.7:
+                    break
+                attempts += 1
+            else:
+                continue
+            path = []
+            for _ in range(self.width + self.height):
+                path.append((x, y))
+                rivers.add((x, y))
+                # Find lowest neighbor
+                min_h = heightmap[y][x]
+                next_x, next_y = x, y
+                for dx, dy in [(-1,0),(1,0),(0,-1),(0,1)]:
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < self.width and 0 <= ny < self.height:
+                        if heightmap[ny][nx] < min_h:
+                            min_h = heightmap[ny][nx]
+                            next_x, next_y = nx, ny
+                if (next_x, next_y) == (x, y) or heightmap[next_y][next_x] < 0.28:
+                    break  # Reached sea or local minimum
+                x, y = next_x, next_y
+        return rivers
 
     def ascii_map(self) -> str:
         """
-        Generate an ANSI-colored ASCII map in the style of Dwarf Fortress.
-        Biomes and features are determined by height, dryness, latitude, and noise.
+        Generate an ANSI-colored ASCII map in the style of Dwarf Fortress, with improved continents, mountains, rivers, and biomes.
         """
-        heightmap: list[list[float]] = self.generate_heightmap()
-        dryness_noise: list[list[float]] = [
-            [self._noise(x + 1024, y + 1024) * 0.5 + 0.5 for x in range(self.width)]
-            for y in range(self.height)
-        ]
-        river_noise: list[list[float]] = [
-            [abs(self._noise(x + 2048, y + 2048)) for x in range(self.width)]
-            for y in range(self.height)
-        ]
-        road_noise: list[list[float]] = [
-            [abs(self._noise(x + 4096, y + 4096)) for x in range(self.width)]
-            for y in range(self.height)
-        ]
-        feature_noise: list[list[float]] = [
-            [self._noise(x + 8192, y + 8192) * 0.5 + 0.5 for x in range(self.width)]
-            for y in range(self.height)
-        ]
-
-        lines: list[str] = []
-        for y, row in enumerate(heightmap):
-            lat: float = y / (self.height - 1)
-            lat_factor: float = 1 - abs(lat - 0.5) * 2  # -1 (pole) to 1 (equator)
-            line: list[str] = []
-            for x, h in enumerate(row):
-                base_d: float = dryness_noise[y][x]
-                # Blend dryness with latitude for climate zones
-                d: float = min(1.0, base_d * 0.6 + lat_factor * 0.4)
-                r: float = river_noise[y][x]
-                road: float = road_noise[y][x]
-                f: float = feature_noise[y][x]
-                char: str = ""
-
+        heightmap = self.generate_heightmap()
+        moisture = self._generate_moisture()
+        rivers = self._find_rivers(heightmap)
+        assert all(isinstance(row, list) for row in heightmap), "Heightmap contains non-list rows in ascii_map"
+        assert all(isinstance(row, list) for row in moisture), "Moisture map contains non-list rows in ascii_map"
+        lines: List[str] = []
+        for y in range(self.height):
+            lat = y / (self.height - 1)
+            lat_factor = 1 - abs(lat - 0.5) * 2  # -1 (pole) to 1 (equator)
+            line: List[str] = []
+            if heightmap[y] is None:
+                raise RuntimeError(f"heightmap[{y}] is None")
+            if moisture[y] is None:
+                raise RuntimeError(f"moisture[{y}] is None")
+            for x in range(self.width):
+                if heightmap[y][x] is None:
+                    raise RuntimeError(f"heightmap[{y}][{x}] is None")
+                if moisture[y][x] is None:
+                    raise RuntimeError(f"moisture[{y}][{x}] is None")
+                h = heightmap[y][x]
+                m = moisture[y][x]
+                is_river = (x, y) in rivers
+                char = ""
                 # --- Terrain and Biome Logic ---
                 if h < 0.28:
-                    # Deep ocean
-                    char = "\x1b[34m~\x1b[0m"
+                    char = "\x1b[34m~\x1b[0m"  # Deep ocean
                 elif h < 0.32:
-                    # Shallow water/coast
-                    char = "\x1b[36m≈\x1b[0m"
-                elif r < 0.018 and h >= 0.33 and d < 0.7:
-                    # River
-                    char = "\x1b[96m≋\x1b[0m"
-                elif h > 0.88 and f > 0.93:
-                    # Volcano
-                    char = "\x1b[31m⛰\x1b[0m"
-                elif h >= 0.80:
-                    # High mountains
-                    char = "\x1b[37m▲\x1b[0m"
-                elif h >= 0.70:
-                    # Foothills
-                    char = "\x1b[37m^\x1b[0m"
-                elif d > 0.78 and h > 0.35:
-                    # Desert
-                    char = "\x1b[33m░\x1b[0m"
+                    char = "\x1b[36m≈\x1b[0m"  # Shallow water/coast
+                elif is_river:
+                    char = "\x1b[96m≋\x1b[0m"  # River
+                elif h > 0.88:
+                    char = "\x1b[37m▲\x1b[0m"  # High mountains
+                elif h > 0.78:
+                    char = "\x1b[37m^\x1b[0m"  # Foothills
                 elif lat < 0.13 and h > 0.33:
-                    # Arctic tundra (north pole)
-                    char = "\x1b[37m^\x1b[0m"
+                    char = "\x1b[37m^\x1b[0m"  # Arctic tundra (north pole)
                 elif lat > 0.87 and h > 0.33:
-                    # Antarctic tundra (south pole)
-                    char = "\x1b[37m^\x1b[0m"
-                elif d < 0.32 and 0.33 < h < 0.7 and lat_factor > 0.2:
-                    # Swamp
-                    char = "\x1b[92m#\x1b[0m"
-                elif d < 0.45 and 0.33 < h < 0.7 and lat_factor > 0.1:
-                    # Forest
-                    char = "\x1b[32mn\x1b[0m"
-                elif d < 0.60 and 0.33 < h < 0.7:
-                    # Grassland
-                    char = "\x1b[32m,\x1b[0m"
-                elif d < 0.75 and 0.33 < h < 0.7:
-                    # Plains
-                    char = "\x1b[32m.\x1b[0m"
-                elif road > 0.48 and road < 0.52 and h > 0.33:
-                    # Road
-                    char = "\x1b[90m═\x1b[0m"
-                elif f > 0.78 and 0.4 < h < 0.7 and d < 0.7:
-                    # City
-                    char = "\x1b[35m¤\x1b[0m"
+                    char = "\x1b[37m^\x1b[0m"  # Antarctic tundra (south pole)
+                elif m > 0.78 and h > 0.35:
+                    char = "\x1b[33m░\x1b[0m"  # Desert
+                elif m < 0.32 and 0.33 < h < 0.7 and lat_factor > 0.2:
+                    char = "\x1b[92m#\x1b[0m"  # Swamp
+                elif m < 0.45 and 0.33 < h < 0.7 and lat_factor > 0.1:
+                    char = "\x1b[32mn\x1b[0m"  # Forest
+                elif m < 0.60 and 0.33 < h < 0.7:
+                    char = "\x1b[32m,\x1b[0m"  # Grassland
+                elif m < 0.75 and 0.33 < h < 0.7:
+                    char = "\x1b[32m.\x1b[0m"  # Plains
                 else:
-                    # Default land
-                    char = "\x1b[32m·\x1b[0m"
+                    char = "\x1b[32m·\x1b[0m"  # Default land
                 line.append(char)
             lines.append("".join(line))
         return "\n".join(lines)
